@@ -178,6 +178,7 @@ func TestWSBridge_NilDeps_MethodsReturnError(t *testing.T) {
 		{"lite.getTransactions", map[string]string{"address": "bad"}},
 		{"lite.lookupBlock", map[string]string{"shard": "not-hex"}},
 		{"lite.sendMessage", map[string]string{"boc": "!!!invalid-base64!!!"}},
+		{"lite.sendMessageAll", map[string]string{"boc": "!!!invalid-base64!!!"}},
 	}
 
 	for _, tc := range invalidParamMethods {

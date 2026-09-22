@@ -120,6 +120,7 @@ DHT write methods are disabled by default. Set `namespaces.dht.allow_write` to `
 | `lite.emulateTransaction` | `address`, `boc`, optional `ignore_chksig` | Transaction emulation and fees | 10s |
 | `lite.sendMessage` | `boc` | `{hash, status}` | 10s |
 | `lite.sendMessageWait` | `boc` | `{hash, status}` | 60s |
+| `lite.sendMessageAll` | `boc` | `{hash, status, asked, nodes[], error?}` | 10s |
 | `lite.getTransactions` | `address`, `limit`, optional `last_lt`, optional `last_hash` | `{transactions}` | 10s |
 | `lite.getTransaction` | `address`, `lt` | Serialized transaction | 10s |
 | `lite.findTxByInMsgHash` | `address`, `msg_hash` | Serialized transaction | 10s |
@@ -135,6 +136,8 @@ DHT write methods are disabled by default. Set `namespaces.dht.allow_write` to `
 | `lite.sendAndWatch` | `boc` | Watch ID and message hash | 180s |
 
 `lite.sendMessageWait` waits longer for the liteserver response. It does not wait for on-chain confirmation.
+
+`lite.sendMessageAll` sends to every connected liteserver at once and answers as soon as one accepts: `status` is 1 when any did. `nodes` holds each answer received by then (`node`, `status`, optional `error`) and `asked` how many were sent to. When none accepts, `status` is 0 and `error` is the first liteserver error; when no liteserver answered at all, the call returns an RPC error.
 
 `lite.emulateMessage` runs compute and action logic without broadcasting. `lite.emulateTransaction` runs the full transaction phases and supports existing uninitialized accounts when the message carries their `StateInit`. Both use verified account and config state. Some block context remains synthetic, so on-chain results may differ.
 

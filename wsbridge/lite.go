@@ -10,6 +10,8 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -668,6 +670,137 @@ func (b *WSBridge) handleSendMessage(client *wsClient, req *WSRequest) {
 		"hash":   hex.EncodeToString(msgHash),
 		"status": status,
 	})
+}
+
+// maxSendNodes caps lite.sendMessageAll's fan-out; a global config lists a
+// few dozen liteservers at most.
+const maxSendNodes = 32
+
+// liteNodes returns one context pinned to each liteserver the pool is
+// connected to, the best first.
+func liteNodes(ctx context.Context, lc ton.LiteClient) []context.Context {
+	cur := lc.StickyContext(ctx)
+	out := []context.Context{cur}
+	for len(out) < maxSendNodes {
+		next, err := lc.StickyContextNextNode(cur)
+		if err != nil {
+			break
+		}
+		out = append(out, next)
+		cur = next
+	}
+	return out
+}
+
+// handleSendMessageAll hands the message to every connected liteserver at
+// once instead of the one the balancer picks, so one that times out or has
+// fallen behind does not decide whether the message goes out; each that
+// accepts it broadcasts it itself.
+//
+// The answer is lite.sendMessage's — status 1 when any liteserver accepted —
+// with each one's own answer under "nodes". It is sent as soon as one
+// accepts, and the rest are still asked. When none accepts and one answered
+// with a liteserver error, status is 0 and "error" is that error; when none
+// answered at all, it is an RPC error, as it is for lite.sendMessage.
+func (b *WSBridge) handleSendMessageAll(client *wsClient, req *WSRequest) {
+	var params struct {
+		BOC string `json:"boc"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		b.sendError(client, req.ID, "invalid params: "+err.Error(), -32602)
+		return
+	}
+
+	bocBytes, err := decodeBase64(params.BOC)
+	if err != nil {
+		b.sendError(client, req.ID, "invalid base64 boc: "+err.Error(), -32602)
+		return
+	}
+
+	c, err := cell.FromBOC(bocBytes)
+	if err != nil {
+		b.sendError(client, req.ID, "invalid BOC: "+err.Error(), -32602)
+		return
+	}
+	msgHash := c.Hash()
+
+	// The sends outlive the answer: it goes back at the first acceptance, and
+	// the context is cancelled only once every liteserver has answered.
+	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
+	lc := b.api.Client()
+	nodes := liteNodes(ctx, lc)
+
+	type answer struct {
+		node   uint32
+		status int32
+		lsErr  string
+		err    error
+	}
+	answers := make(chan answer, len(nodes))
+	var wg sync.WaitGroup
+	wg.Add(len(nodes))
+	for _, nctx := range nodes {
+		go func(nctx context.Context) {
+			defer wg.Done()
+			var resp tl.Serializable
+			err := lc.QueryLiteserver(nctx, ton.SendMessage{Body: bocBytes}, &resp)
+			a := answer{node: lc.StickyNodeID(nctx), err: err}
+			switch r := resp.(type) {
+			case ton.SendMessageStatus:
+				a.status = r.Status
+			case ton.LSError:
+				a.lsErr = fmt.Sprintf("liteserver error %d: %s", r.Code, r.Text)
+			}
+			answers <- a
+		}(nctx)
+	}
+	go func() {
+		wg.Wait()
+		cancel()
+	}()
+
+	var (
+		got      []map[string]any
+		failures []string
+		lsErr    string
+		accepted bool
+	)
+	for range nodes {
+		a := <-answers
+		entry := map[string]any{"node": a.node, "status": a.status}
+		switch {
+		case a.err != nil:
+			entry["error"] = a.err.Error()
+			failures = append(failures, a.err.Error())
+		case a.lsErr != "":
+			entry["error"] = a.lsErr
+			if lsErr == "" {
+				lsErr = a.lsErr
+			}
+		}
+		got = append(got, entry)
+		if a.status == 1 {
+			accepted = true
+			break
+		}
+	}
+
+	result := map[string]any{
+		"hash":  hex.EncodeToString(msgHash),
+		"asked": len(nodes),
+		"nodes": got,
+	}
+	switch {
+	case accepted:
+		result["status"] = int32(1)
+	case lsErr != "":
+		result["status"] = int32(0)
+		result["error"] = lsErr
+	default:
+		b.sendError(client, req.ID, "send message failed on every liteserver: "+strings.Join(failures, "; "))
+		return
+	}
+	b.sendResult(client, req.ID, result)
 }
 
 // handleSendMessageWait sends a message with a longer timeout (60s). Despite the name,

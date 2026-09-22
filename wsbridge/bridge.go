@@ -447,6 +447,8 @@ func (b *WSBridge) handleRequest(client *wsClient, req *WSRequest) {
 		b.handleEmulateTransaction(client, req)
 	case "lite.sendMessage":
 		b.handleSendMessage(client, req)
+	case "lite.sendMessageAll":
+		b.handleSendMessageAll(client, req)
 	case "lite.getTransactions":
 		b.handleGetTransactions(client, req)
 	case "lite.getTime":
