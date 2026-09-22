@@ -364,6 +364,14 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 
 	lastSeqno := master.SeqNo
 
+	walk := &shardWalk{}
+	if first, err := b.api.GetBlockShardsInfo(ctx, master); err == nil {
+		walk.start(first)
+	} else {
+		log.Warn().Err(err).Msg("failed to read the start block's shards, skipped shard blocks will not be read back until the next one")
+	}
+	src := apiShardBlocks{b.api}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -388,7 +396,16 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 			time.Sleep(time.Second)
 			continue
 		}
-		blocks = append(blocks, shards...)
+		// The shard blocks the masterchain block names are each shard's newest;
+		// the ones committed before them under the same masterchain block are
+		// read back, and a shard block named again is not sent twice.
+		unseen, next, walkErr := walk.unseen(ctx, src, shards)
+		if walkErr != nil {
+			log.Warn().Err(walkErr).Msg("failed to read back skipped shard blocks, retrying block")
+			time.Sleep(time.Second)
+			continue
+		}
+		blocks = append(blocks, unseen...)
 
 		type blockTransactions struct {
 			block *ton.BlockIDExt
@@ -425,6 +442,7 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 			}
 		}
 
+		walk.commit(next)
 		lastSeqno = block.SeqNo
 	}
 }
