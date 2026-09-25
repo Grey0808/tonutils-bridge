@@ -138,6 +138,10 @@ type WSBridge struct {
 
 	overlayToPeer   map[string]string // overlay hex → peer hex (moved from overlay.go global)
 	overlayToPeerMu sync.Mutex
+
+	// newest is the masterchain's newest block as followHead last saw it;
+	// state reads are made at it (head.go).
+	newest newestHead
 }
 
 // pendingQuery holds the peer that sent an inbound ADNL/overlay query together
@@ -221,6 +225,8 @@ func (b *WSBridge) Start(ctx context.Context, addr string) error {
 		defer c()
 		server.Shutdown(shutCtx)
 	}()
+
+	go b.followHead(ctx)
 
 	// Background goroutine: evict expired pendingQueries entries every 10 seconds.
 	go func() {

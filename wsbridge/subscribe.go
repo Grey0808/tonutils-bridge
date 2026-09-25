@@ -452,6 +452,7 @@ func (b *WSBridge) nextMasterchainBlock(ctx context.Context, lastSeqno uint32) (
 	if err != nil {
 		return nil, err
 	}
+	b.noteHead(tip)
 	return b.api.LookupBlock(ctx, tip.Workchain, tip.Shard, lastSeqno+1)
 }
 

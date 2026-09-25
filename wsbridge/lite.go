@@ -59,12 +59,12 @@ func (b *WSBridge) handleGetAccountState(client *wsClient, req *WSRequest) {
 	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
 	defer cancel()
 
-	block, err := b.api.CurrentMasterchainInfo(ctx)
+	block, api, err := b.stateHead(ctx)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get masterchain info: "+err.Error())
 		return
 	}
-	acc, err := b.api.GetAccount(ctx, block, addr)
+	acc, err := api.GetAccount(ctx, block, addr)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get account: "+err.Error())
 		return
@@ -131,7 +131,7 @@ func (b *WSBridge) handleRunMethod(client *wsClient, req *WSRequest) {
 	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
 	defer cancel()
 
-	block, err := b.api.CurrentMasterchainInfo(ctx)
+	block, api, err := b.stateHead(ctx)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get masterchain info: "+err.Error())
 		return
@@ -148,7 +148,7 @@ func (b *WSBridge) handleRunMethod(client *wsClient, req *WSRequest) {
 		methodParams = append(methodParams, converted)
 	}
 
-	res, err := b.api.RunGetMethod(ctx, block, addr, params.Method, methodParams...)
+	res, err := api.RunGetMethod(ctx, block, addr, params.Method, methodParams...)
 	if err != nil {
 		b.sendError(client, req.ID, "run method failed: "+err.Error())
 		return
