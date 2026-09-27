@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -142,6 +143,8 @@ type WSBridge struct {
 	// newest is the masterchain's newest block as followHead last saw it;
 	// state reads are made at it (head.go).
 	newest newestHead
+	// headTurn takes the liteservers that have named newest in turn.
+	headTurn atomic.Uint64
 }
 
 // pendingQuery holds the peer that sent an inbound ADNL/overlay query together

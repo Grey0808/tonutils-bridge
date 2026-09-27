@@ -59,7 +59,7 @@ func (b *WSBridge) handleGetAccountState(client *wsClient, req *WSRequest) {
 	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
 	defer cancel()
 
-	block, api, err := b.stateHead(ctx)
+	ctx, block, api, err := b.stateHead(ctx)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get masterchain info: "+err.Error())
 		return
@@ -131,7 +131,7 @@ func (b *WSBridge) handleRunMethod(client *wsClient, req *WSRequest) {
 	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
 	defer cancel()
 
-	block, api, err := b.stateHead(ctx)
+	ctx, block, api, err := b.stateHead(ctx)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get masterchain info: "+err.Error())
 		return
