@@ -274,7 +274,13 @@ func (b *WSBridge) handleEmulateMessage(client *wsClient, req *WSRequest) {
 	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
 	defer cancel()
 
-	block, err := b.api.CurrentMasterchainInfo(ctx)
+	// At the block every state read is made at (stateHead), not tonutils-go's
+	// cached head. A caller that has just read the account and signed against
+	// what it read was otherwise answered from a block a second or more older:
+	// on 2026-09-30 an engine read the position its route had just left, signed
+	// the sale, and was told here that the contract held nothing (its exit 105),
+	// which held the position for three minutes.
+	ctx, block, api, err := b.stateHead(ctx)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get masterchain info: "+err.Error())
 		return
@@ -285,7 +291,7 @@ func (b *WSBridge) handleEmulateMessage(client *wsClient, req *WSRequest) {
 		return
 	}
 
-	acc, err := b.api.GetAccount(ctx, block, addr)
+	acc, err := api.GetAccount(ctx, block, addr)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get account: "+err.Error())
 		return
@@ -295,7 +301,7 @@ func (b *WSBridge) handleEmulateMessage(client *wsClient, req *WSRequest) {
 		return
 	}
 
-	bcCfg, err := b.api.GetBlockchainConfig(ctx, block)
+	bcCfg, err := api.GetBlockchainConfig(ctx, block)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get blockchain config: "+err.Error())
 		return
@@ -425,7 +431,9 @@ func (b *WSBridge) handleEmulateTransaction(client *wsClient, req *WSRequest) {
 	ctx, cancel := context.WithTimeout(client.ctx, b.cfg.Namespaces.Lite.Timeout)
 	defer cancel()
 
-	block, err := b.api.CurrentMasterchainInfo(ctx)
+	// At the block every state read is made at, for the reason
+	// handleEmulateMessage gives.
+	ctx, block, api, err := b.stateHead(ctx)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get masterchain info: "+err.Error())
 		return
@@ -436,7 +444,7 @@ func (b *WSBridge) handleEmulateTransaction(client *wsClient, req *WSRequest) {
 		return
 	}
 
-	acc, err := b.api.GetAccount(ctx, block, addr)
+	acc, err := api.GetAccount(ctx, block, addr)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get account: "+err.Error())
 		return
@@ -459,7 +467,7 @@ func (b *WSBridge) handleEmulateTransaction(client *wsClient, req *WSRequest) {
 		LastTransLT:   acc.LastTxLT,
 	}
 
-	bcCfg, err := b.api.GetBlockchainConfig(ctx, block)
+	bcCfg, err := api.GetBlockchainConfig(ctx, block)
 	if err != nil {
 		b.sendError(client, req.ID, "failed to get blockchain config: "+err.Error())
 		return
