@@ -139,12 +139,46 @@ func (b *WSBridge) noteHead(blk *ton.BlockIDExt, n headNode) {
 func (b *WSBridge) stateHead(ctx context.Context) (context.Context, *ton.BlockIDExt, ton.APIClientWrapped, error) {
 	if h := b.newest.Load(); h != nil && time.Since(h.at) < headFresh {
 		if len(h.nodes) > 0 {
-			ctx = pinned{ctx, h.nodes[b.headTurn.Add(1)%uint64(len(h.nodes))].pin}
+			ctx = pinned{ctx, b.nextHeadNode(h.nodes).pin}
 		}
 		return ctx, h.block, b.api.WaitForBlock(h.block.SeqNo), nil
 	}
 	blk, err := b.api.CurrentMasterchainInfo(ctx)
 	return ctx, blk, b.api, err
+}
+
+// nextHeadNode takes the next of nodes in turn, leaving out the ones whose
+// shard client lagged a moment ago (syncwatch.go), so the others share their
+// reads evenly. When every one lagged, it takes the next of them all, as it
+// would have before.
+func (b *WSBridge) nextHeadNode(nodes []headNode) headNode {
+	turn := b.headTurn.Add(1)
+	if b.syncs != nil {
+		live := make([]headNode, 0, len(nodes))
+		for _, n := range nodes {
+			if !b.syncs.passedOver(n.id) {
+				live = append(live, n)
+			}
+		}
+		if len(live) > 0 {
+			return live[turn%uint64(len(live))]
+		}
+	}
+	return nodes[turn%uint64(len(nodes))]
+}
+
+// blockContents is the API and the context to read what masterchain block
+// seqno holds, its shard blocks and their transactions, through. The
+// liteserver is told to wait for seqno, so one that has not got it yet
+// answers once it has, where it answered "not in db" before and the stream
+// slept a second over it: ten times a minute on 2026-10-02. And when the
+// newest block followed is seqno or later, the read is pinned to a
+// liteserver that has named it, as a state read is.
+func (b *WSBridge) blockContents(ctx context.Context, seqno uint32) (context.Context, ton.APIClientWrapped) {
+	if h := b.newest.Load(); h != nil && h.block.SeqNo >= seqno && time.Since(h.at) < headFresh && len(h.nodes) > 0 {
+		ctx = pinned{ctx, b.nextHeadNode(h.nodes).pin}
+	}
+	return ctx, b.api.WaitForBlock(seqno)
 }
 
 // pinned is a context with the deadline, cancellation and values of its own

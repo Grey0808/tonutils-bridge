@@ -135,8 +135,12 @@ func run(cfg *Config) error {
 	defer wsGate.Close()
 
 	// 7. Create and start bridge
-	wsAPI := ton.NewAPIClient(connPool, ton.ProofCheckPolicyFast).WithRetryTimeout(2, 5*time.Second)
+	// The watch sits under the retries, so it hears every liteserver that
+	// answers, the ones a retry moved on from included.
+	syncs := wsbridge.WatchSync(connPool)
+	wsAPI := ton.NewAPIClient(syncs, ton.ProofCheckPolicyFast).WithRetryTimeout(2, 5*time.Second)
 	bridge := wsbridge.NewWSBridge(cfg.ToWSBridgeConfig(), dhtClient, wsAPI, dnsClient, wsGate, privKey)
+	bridge.PassOverLagging(syncs)
 
 	log.Info().Str("addr", cfg.Listen).Msg("Starting WebSocket bridge")
 	return bridge.Start(ctx, cfg.Listen)

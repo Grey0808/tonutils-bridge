@@ -170,7 +170,8 @@ func (b *WSBridge) handleSubscribeBlocks(client *wsClient, req *WSRequest) {
 			continue
 		}
 
-		shards, shardsErr := b.api.GetBlockShardsInfo(ctx, block)
+		rctx, api := b.blockContents(ctx, block.SeqNo)
+		shards, shardsErr := api.GetBlockShardsInfo(rctx, block)
 		if shardsErr != nil {
 			log.Warn().Err(shardsErr).Msg("failed to get block shards info, retrying block")
 			time.Sleep(time.Second)
@@ -370,7 +371,10 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 	} else {
 		log.Warn().Err(err).Msg("failed to read the start block's shards, skipped shard blocks will not be read back until the next one")
 	}
-	src := apiShardBlocks{b.api}
+
+	// failures is how many times in a row reading a block's contents failed;
+	// see contentsRetry.
+	failures := 0
 
 	for {
 		select {
@@ -390,19 +394,22 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 
 		// Collect transactions from masterchain block + all shard blocks
 		blocks := []*ton.BlockIDExt{block}
-		shards, shardsErr := b.api.GetBlockShardsInfo(ctx, block)
+		rctx, api := b.blockContents(ctx, block.SeqNo)
+		shards, shardsErr := api.GetBlockShardsInfo(rctx, block)
 		if shardsErr != nil {
 			log.Warn().Err(shardsErr).Msg("failed to get block shards info, retrying block")
-			time.Sleep(time.Second)
+			failures++
+			time.Sleep(contentsRetry(failures))
 			continue
 		}
 		// The shard blocks the masterchain block names are each shard's newest;
 		// the ones committed before them under the same masterchain block are
 		// read back, and a shard block named again is not sent twice.
-		unseen, next, walkErr := walk.unseen(ctx, src, shards)
+		unseen, next, walkErr := walk.unseen(rctx, apiShardBlocks{api}, shards)
 		if walkErr != nil {
 			log.Warn().Err(walkErr).Msg("failed to read back skipped shard blocks, retrying block")
-			time.Sleep(time.Second)
+			failures++
+			time.Sleep(contentsRetry(failures))
 			continue
 		}
 		blocks = append(blocks, unseen...)
@@ -414,7 +421,7 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 		collected := make([]blockTransactions, 0, len(blocks))
 		failed := false
 		for _, blk := range blocks {
-			txList, err := b.collectBlockTransactions(ctx, blk)
+			txList, err := collectBlockTransactions(rctx, api, blk)
 			if err != nil {
 				log.Warn().Err(err).Uint32("seqno", blk.SeqNo).Msg("failed to read all block transactions, retrying block")
 				failed = true
@@ -423,9 +430,11 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 			collected = append(collected, blockTransactions{block: blk, txs: txList})
 		}
 		if failed {
-			time.Sleep(time.Second)
+			failures++
+			time.Sleep(contentsRetry(failures))
 			continue
 		}
+		failures = 0
 
 		for _, item := range collected {
 			for _, tx := range item.txs {
@@ -447,15 +456,33 @@ func (b *WSBridge) handleSubscribeNewTransactions(client *wsClient, req *WSReque
 	}
 }
 
+// contentsRetry is how long the stream waits before reading a block's
+// contents again after the read failed for the failures-th time in a row. A
+// failed read is nearly always a liteserver whose shard client lags, which the
+// next read passes over (syncwatch.go), so the first few are tried again at
+// once rather than a second later, while the blocks behind wait: a second was
+// two or three blocks every time, ten times a minute on 2026-10-02. One that
+// goes on failing is something else and is waited on as before.
+func contentsRetry(failures int) time.Duration {
+	if failures <= 3 {
+		return 100 * time.Millisecond
+	}
+	return time.Second
+}
+
+// nextMasterchainBlock waits for the masterchain block after lastSeqno. The
+// lookup waits for it too: it may go to another liteserver than the wait did,
+// one that has not got the block yet.
 func (b *WSBridge) nextMasterchainBlock(ctx context.Context, lastSeqno uint32) (*ton.BlockIDExt, error) {
-	tip, err := b.api.WaitForBlock(lastSeqno + 1).GetMasterchainInfo(ctx)
+	api := b.api.WaitForBlock(lastSeqno + 1)
+	tip, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return b.api.LookupBlock(ctx, tip.Workchain, tip.Shard, lastSeqno+1)
+	return api.LookupBlock(ctx, tip.Workchain, tip.Shard, lastSeqno+1)
 }
 
-func (b *WSBridge) collectBlockTransactions(ctx context.Context, block *ton.BlockIDExt) ([]ton.TransactionShortInfo, error) {
+func collectBlockTransactions(ctx context.Context, api ton.APIClientWrapped, block *ton.BlockIDExt) ([]ton.TransactionShortInfo, error) {
 	var all []ton.TransactionShortInfo
 	var after *ton.TransactionID3
 	for {
@@ -465,9 +492,9 @@ func (b *WSBridge) collectBlockTransactions(ctx context.Context, block *ton.Bloc
 			err        error
 		)
 		if after == nil {
-			page, incomplete, err = b.api.GetBlockTransactionsV2(ctx, block, 256)
+			page, incomplete, err = api.GetBlockTransactionsV2(ctx, block, 256)
 		} else {
-			page, incomplete, err = b.api.GetBlockTransactionsV2(ctx, block, 256, after)
+			page, incomplete, err = api.GetBlockTransactionsV2(ctx, block, 256, after)
 		}
 		if err != nil {
 			return nil, err

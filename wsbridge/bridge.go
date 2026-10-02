@@ -145,7 +145,14 @@ type WSBridge struct {
 	newest newestHead
 	// headTurn takes the liteservers that have named newest in turn.
 	headTurn atomic.Uint64
+	// syncs notes the liteservers whose shard client lags, for state reads
+	// to pass over (syncwatch.go); nil passes over none.
+	syncs *SyncWatch
 }
+
+// PassOverLagging makes state reads pass over the liteservers w has noted as
+// lagging. w must be the LiteClient under the bridge's API, or it notes none.
+func (b *WSBridge) PassOverLagging(w *SyncWatch) { b.syncs = w }
 
 // pendingQuery holds the peer that sent an inbound ADNL/overlay query together
 // with the absolute deadline after which the entry is considered stale.
